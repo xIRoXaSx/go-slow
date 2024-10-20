@@ -8,20 +8,28 @@ import (
 )
 
 func (r *RateLimiter) startScheduler() {
+	defer close(r.stopChan)
+
 	for {
+		// We need to block all executions if the slots are exhausted.
+		if r.num.Load() >= r.limit {
+			// Wait for a free slot.
+			<-r.qDoneChan
+		}
+
 		select {
-		case queued := <-r.qChan:
-			// We need to block all executions if the slots are exhausted.
-			if r.num.Load() >= r.limit {
-				// Wait for a free slot.
-				<-r.qDoneChan
+		case queued, ok := <-r.qChan:
+			if !ok {
+				return
 			}
 
+			r.num.Add(1)
 			go func() {
 				err := r.run(queued.ctx, queued.f)
 				if err != nil {
-					r.errChan <- fmt.Errorf("run failed: %v", err)
+					r.errChan <- fmt.Errorf("run failed: %w", err)
 				}
+				r.decrementCounterAfterDur()
 			}()
 
 		case <-r.stopChan:
@@ -31,22 +39,24 @@ func (r *RateLimiter) startScheduler() {
 }
 
 func (r *RateLimiter) run(ctx context.Context, rf RateLimitFunc) (err error) {
-	r.num.Add(1)
-	defer r.decrement()
-
 	c := make(chan error, 1)
-	c <- rf()
+	go func() { c <- rf() }()
+
 	select {
 	case cErr := <-c:
 		if cErr != nil {
-			err = fmt.Errorf("ratelimited run: %v", cErr)
+			err = fmt.Errorf("ratelimited run: %w", cErr)
 		}
 
 	case <-ctx.Done():
 		cErr := ctx.Err()
 		if cErr != nil {
-			err = fmt.Errorf("context cancelled: %v", cErr)
+			err = fmt.Errorf("context cancelled: %w", cErr)
 		}
+	}
+
+	if err == nil {
+		return
 	}
 
 	r.errMux.Lock()
@@ -56,13 +66,17 @@ func (r *RateLimiter) run(ctx context.Context, rf RateLimitFunc) (err error) {
 	return
 }
 
-func (r *RateLimiter) decrement() {
-	defer func() { r.qDoneChan <- struct{}{} }()
-	<-time.NewTimer(r.dur).C
+func (r *RateLimiter) decrementCounterAfterDur() {
+	tick := time.NewTicker(r.dur)
+	defer func() {
+		tick.Stop()
+		r.qDoneChan <- struct{}{}
+	}()
+	<-tick.C
 
 	num := r.num.Load()
 	if num == 0 {
 		return
 	}
-	r.num.Store(num - 1)
+	r.num.Add(-1)
 }

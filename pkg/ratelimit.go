@@ -21,9 +21,9 @@ type queuedRateLimitItem struct {
 }
 
 type RateLimiter struct {
-	limit     uint32
+	limit     int32
 	dur       time.Duration
-	num       *atomic.Uint32
+	num       *atomic.Int32
 	errChan   chan error
 	qChan     chan queuedRateLimitItem
 	qDoneChan chan struct{}
@@ -32,11 +32,11 @@ type RateLimiter struct {
 	errMux    *sync.RWMutex
 }
 
-func New(limit uint32, dur time.Duration) RateLimiter {
+func New(limit int32, dur time.Duration) RateLimiter {
 	return RateLimiter{
 		limit:     limit,
 		dur:       dur,
-		num:       &atomic.Uint32{},
+		num:       &atomic.Int32{},
 		errChan:   make(chan error),
 		qChan:     make(chan queuedRateLimitItem),
 		qDoneChan: make(chan struct{}),
@@ -49,9 +49,13 @@ func (r *RateLimiter) StartScheduler() {
 	go r.startScheduler()
 }
 
-func (r *RateLimiter) Stop() {
+func (r *RateLimiter) StopNow() {
 	r.stopChan <- struct{}{}
-	close(r.stopChan)
+}
+
+func (r *RateLimiter) StopWait() {
+	// Drain queue channel.
+	close(r.qChan)
 }
 
 func (r *RateLimiter) StopChan() <-chan struct{} {
@@ -69,7 +73,7 @@ func (r *RateLimiter) RunNow(ctx context.Context, rf RateLimitFunc) (err error) 
 	go func() {
 		err := r.run(ctx, rf)
 		if err != nil {
-			r.errChan <- fmt.Errorf("runnow failed: %w", err)
+			r.errChan <- fmt.Errorf("run now failed: %w", err)
 		}
 	}()
 	return
