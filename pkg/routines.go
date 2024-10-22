@@ -28,6 +28,8 @@ func (r *RateLimiter) startScheduler() {
 				err := r.run(queued.ctx, queued.f)
 				if err != nil {
 					r.errChan <- fmt.Errorf("run failed: %w", err)
+				} else {
+					r.runDoneChan <- struct{}{}
 				}
 				r.decrementCounterAfterDur()
 			}()
