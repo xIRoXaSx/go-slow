@@ -110,6 +110,12 @@ func (r *RateLimiter) Queue(ctx context.Context, rf RateLimitFunc) (err error) {
 	return
 }
 
+// QueueLength returns the length of the queue.
+// Will always return 0 if buffSize of [New] is set to 0.
+func (r *RateLimiter) QueueLength() int {
+	return len(r.qChan)
+}
+
 // ErrChan returns the error channel which receives errors on the go.
 func (r *RateLimiter) ErrChan() <-chan error {
 	return r.errChan
